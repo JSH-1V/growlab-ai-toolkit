@@ -32,11 +32,14 @@ import { motion, AnimatePresence } from 'motion/react';
 
 // --- Constants & Types ---
 const BASE_URL = 'https://hsk-n8n.ju2hpi.easypanel.host/webhook';
+
 const WEBHOOKS = {
   LB_ORCHESTRATOR: `${BASE_URL}/orchestrator-v2`,
-  CL_CLASSIFIER: `${BASE_URL}/cold-lead-classifier`,
+  LOG_READER: `${BASE_URL}/log-reader`,
+  LOGGER_CORE: `${BASE_URL}/logger-core`,
   CL_STRATEGY: `${BASE_URL}/cold-lead-sector-strategy`,
   CL_ENRICHER: `${BASE_URL}/cold-lead-enricher`,
+  CL_CLASSIFIER: `${BASE_URL}/cold-lead-classifier`,
 };
 
 type Tool = 'landing-builder' | 'cold-leads';
@@ -205,6 +208,35 @@ export default function App() {
     }
   }, [logs]);
 
+  // --- Lector de Logs Real desde n8n ---
+  useEffect(() => {
+    const fetchRemoteLogs = async () => {
+      try {
+        const response = await fetch(WEBHOOKS.LOG_READER);
+        if (response.ok) {
+          const data = await response.json();
+          // Si n8n devuelve un array de strings o de objetos
+          if (Array.isArray(data) && data.length > 0) {
+            const newLogs = data.map((msg: any, index: number) => ({
+              id: `remote-${Date.now()}-${index}`,
+              time: new Date().toLocaleTimeString('en-US', { hour12: false }),
+              status: 'INFO' as const,
+              message: typeof msg === 'string' ? msg : JSON.stringify(msg)
+            }));
+            // Actualizamos los logs sin borrar los anteriores, limitando a los últimos 50
+            setLogs(prev => [...prev, ...newLogs].slice(-50));
+          }
+        }
+      } catch (error) {
+        console.error("Error consultando log-reader:", error);
+      }
+    };
+
+    // Consultar cada 4 segundos
+    const interval = setInterval(fetchRemoteLogs, 4000);
+    return () => clearInterval(interval);
+  }, []);
+
   // --- Landing Builder State ---
   const [lbScript, setLbScript] = useState('');
   const [lbProjectType, setLbProjectType] = useState('landing');
@@ -300,15 +332,15 @@ export default function App() {
     return () => clearInterval(interval);
   }, [lbIsGenerating, lbStartTime]);
 
-  const handleLbGenerate = async () => {
-    if (!lbScript.trim()) return;
-    
-    setLbIsGenerating(true);
-    setLbHtml(null);
-    setLbProgress(0);
-    setLbPhase(1);
-    setLbStartTime(Date.now());
-    addLog('START', 'Initializing Landing Builder pipeline...');
+const handleLbGenerate = async () => {
+  if (!lbScript.trim()) return;
+  
+  setLbIsGenerating(true);
+  setLbHtml(null);
+  setLbProgress(0);
+  setLbPhase(1);
+  setLbStartTime(Date.now());
+  addLog('START', 'Iniciando orquestación en n8n...'); // Mensaje personalizado
 
     // Simulation of progress
     const stages = [
