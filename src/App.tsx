@@ -192,6 +192,7 @@ export default function App() {
   const [activeTool, setActiveTool] = useState<Tool>('landing-builder');
   const [sidebarExpanded, setSidebarExpanded] = useState(true);
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [activeExecutionId, setActiveExecutionId] = useState<string | null>(null);
   const consoleEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -207,40 +208,72 @@ export default function App() {
 
   // --- Dynamic Log Polling ---
   useEffect(() => {
+    if (!activeExecutionId) return;
+
     const pollLogs = async () => {
       try {
-        // Intentamos GET primero, si falla con 400, n8n probablemente espera POST
         const response = await fetch(WEBHOOKS.LOG_READER, {
-          method: 'GET',
-          cache: 'no-store'
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ execution_id: activeExecutionId })
         });
         
         if (response.ok) {
-          const text = await response.text();
-          if (!text || text.trim() === "") return;
+          const data = await response.json();
           
-          try {
-            const data = JSON.parse(text);
-            const logItems = Array.isArray(data) ? data : [data];
-            
-            logItems.forEach(item => {
-              if (item && item.message) {
-                const status = item.status || 'INFO';
-                addLog(status as LogEntry['status'], item.message);
+          if (data.success && data.found) {
+            // Actualizar progreso y fase desde n8n
+            if (activeTool === 'landing-builder') {
+              setLbProgress(data.progress || 0);
+              // Mapear estados de n8n a fases visuales
+              const phaseMap: Record<string, number> = {
+                'script_interpreter': 1,
+                'layout_strategist': 2,
+                'html_renderer': 4,
+                'finalizing': 5,
+                'success': 6
+              };
+              if (data.current_stage && phaseMap[data.current_stage]) {
+                setLbPhase(phaseMap[data.current_stage]);
               }
-            });
-          } catch (e) {
-            console.error("Error parseando logs:", text);
+              if (data.status === 'success' || data.status === 'completed') {
+                setLbPhase(6);
+                setLbProgress(100);
+              }
+            } else {
+              setClProgress(data.progress || 0);
+              const phaseMap: Record<string, number> = {
+                'classifying': 1,
+                'strategy': 2,
+                'enriching': 3,
+                'success': 4
+              };
+              if (data.current_stage && phaseMap[data.current_stage]) {
+                setClPhase(phaseMap[data.current_stage]);
+              }
+            }
+
+            // Procesar logs
+            if (data.logs && Array.isArray(data.logs)) {
+              data.logs.forEach((item: any) => {
+                addLog(item.status || 'INFO', item.message);
+              });
+            }
+
+            // Si terminó, podríamos detener el polling (opcional, n8n dejará de enviar nuevos logs)
+            if (data.status === 'success' || data.status === 'error' || data.status === 'completed') {
+              // Mantener el ID un poco más para los últimos logs y luego limpiar si es necesario
+            }
           }
         }
       } catch (error) {
-        console.error('Log polling network error:', error);
+        console.error('Log polling error:', error);
       }
     };
 
-    const interval = setInterval(pollLogs, 4000);
+    const interval = setInterval(pollLogs, 3000);
     return () => clearInterval(interval);
-  }, [addLog]);
+  }, [activeExecutionId, addLog, activeTool]);
 
   useEffect(() => {
     if (consoleEndRef.current) {
@@ -369,17 +402,21 @@ export default function App() {
   const handleLbGenerate = async () => {
     if (!lbScript.trim()) return;
     
+    const execId = `LB-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+    setActiveExecutionId(execId);
     setLbIsGenerating(true);
     setLbHtml(null);
     setLbProgress(0);
     setLbPhase(1);
     setLbStartTime(Date.now());
-    addLog('START', 'Initializing Landing Builder pipeline...');
+    addLog('START', `Initializing Landing Builder [ID: ${execId}]`);
 
     try {
       const payload: any = {
-        prompt: lbScript, // n8n orchestrator usually expects 'prompt'
+        execution_id: execId,
+        prompt: lbScript,
         script_text: lbScript,
+        // ... resto del payload se mantiene igual
         mode: lbMode,
         template_id: lbTemplateId,
         project_type: lbProjectType,
@@ -442,26 +479,21 @@ export default function App() {
 
       const responseText = await response.text();
 
-      if (!response.ok) {
+      // No lanzamos error si está vacío, ya que el polling se encargará de los resultados
+      if (response.ok && responseText) {
+        try {
+          const data = JSON.parse(responseText);
+          if (data.html || data.html_code) {
+            setLbHtml(data.html || data.html_code);
+          }
+        } catch (e) {
+          console.log("Response is not JSON, waiting for logs...");
+        }
+      } else if (!response.ok) {
         throw new Error(`Server error (${response.status}): ${responseText || response.statusText}`);
-      }
-
-      if (!responseText || responseText.trim() === "") {
-        throw new Error('Server returned an empty response');
-      }
-
-      const data = JSON.parse(responseText);
-      if (data.success || data.html || data.html_code) {
-        setLbHtml(data.html || data.html_code);
-        setLbProgress(100);
-        setLbPhase(6);
-        addLog('SUCCESS', 'Landing page generated successfully!');
-      } else {
-        throw new Error(data.error || 'Generation failed');
       }
     } catch (error: any) {
       addLog('ERROR', `Pipeline error: ${error.message}`);
-    } finally {
       setLbIsGenerating(false);
     }
   };
@@ -469,22 +501,20 @@ export default function App() {
   const handleClProcess = async () => {
     if (!clCsv.trim()) return;
 
+    const execId = `CL-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+    setActiveExecutionId(execId);
     setClIsProcessing(true);
     setClLeads([]);
     setClProgress(0);
     setClPhase(1);
-    addLog('START', 'Launching Cold Lead Engine...');
+    addLog('START', `Launching Cold Lead Engine [ID: ${execId}]`);
 
     try {
-      // Phase 1: Strategy & Processing via n8n
-      setClPhase(1);
-      setClProgress(20);
-      addLog('INFO', 'Sending data to Strategy Engine...');
-      
       const response = await fetch(WEBHOOKS.CL_STRATEGY, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
+          execution_id: execId,
           data: clCsv,
           company_name: clCompanyName,
           sender_name: clSenderName
@@ -493,33 +523,26 @@ export default function App() {
 
       const responseText = await response.text();
 
-      if (!response.ok) {
+      if (response.ok && responseText) {
+        try {
+          const data = JSON.parse(responseText);
+          if (data.leads || data.enriched_leads) {
+            const leads = data.enriched_leads || data.leads || [];
+            setClLeads(leads);
+            setClStats({
+              total: leads.length,
+              sectors: data.sectors_found?.length || 0,
+              enriched: leads.length
+            });
+          }
+        } catch (e) {
+          console.log("Response is not JSON, waiting for logs...");
+        }
+      } else if (!response.ok) {
         throw new Error(`Server error (${response.status}): ${responseText || response.statusText}`);
-      }
-
-      if (!responseText || responseText.trim() === "") {
-        throw new Error('Server returned an empty response');
-      }
-
-      const data = JSON.parse(responseText);
-      
-      if (data.success || data.leads || data.enriched_leads) {
-        const leads = data.enriched_leads || data.leads || [];
-        setClLeads(leads);
-        setClStats({
-          total: leads.length,
-          sectors: data.sectors_found?.length || 0,
-          enriched: leads.length
-        });
-        setClProgress(100);
-        setClPhase(4);
-        addLog('SUCCESS', `Processed ${leads.length} leads successfully.`);
-      } else {
-        throw new Error(data.error || 'Processing failed');
       }
     } catch (error: any) {
       addLog('ERROR', `Engine error: ${error.message}`);
-    } finally {
       setClIsProcessing(false);
     }
   };
