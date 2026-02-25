@@ -31,15 +31,12 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 
 // --- Constants & Types ---
-const BASE_URL = 'https://hsk-n8n.ju2hpi.easypanel.host/webhook';
-
 const WEBHOOKS = {
-  LB_ORCHESTRATOR: `${BASE_URL}/orchestrator-v2`,
-  LOG_READER: `${BASE_URL}/log-reader`,
-  LOGGER_CORE: `${BASE_URL}/logger-core`,
-  CL_STRATEGY: `${BASE_URL}/cold-lead-sector-strategy`,
-  CL_ENRICHER: `${BASE_URL}/cold-lead-enricher`,
-  CL_CLASSIFIER: `${BASE_URL}/cold-lead-classifier`,
+  ORCHESTRATOR: 'https://hsk-n8n.ju2hpi.easypanel.host/webhook/orchestrator-v2',
+  LOG_READER: 'https://hsk-n8n.ju2hpi.easypanel.host/webhook/log-reader',
+  LOGGER_CORE: 'https://hsk-n8n.ju2hpi.easypanel.host/webhook/logger-core',
+  CL_STRATEGY: 'https://hsk-n8n.ju2hpi.easypanel.host/webhook/cold-lead-sector-strategy',
+  CL_ENRICHER: 'https://hsk-n8n.ju2hpi.easypanel.host/webhook/cold-lead-enricher'
 };
 
 type Tool = 'landing-builder' | 'cold-leads';
@@ -196,46 +193,45 @@ export default function App() {
   const [sidebarExpanded, setSidebarExpanded] = useState(true);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const consoleEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const addLog = useCallback((status: LogEntry['status'], message: string) => {
     const time = new Date().toLocaleTimeString('en-US', { hour12: false });
-    setLogs(prev => [...prev, { id: Math.random().toString(36).substr(2, 9), time, status, message }]);
+    setLogs(prev => {
+      // Avoid duplicate logs if polling returns same message
+      const isDuplicate = prev.length > 0 && prev[prev.length - 1].message === message;
+      if (isDuplicate) return prev;
+      return [...prev, { id: Math.random().toString(36).substr(2, 9), time, status, message }];
+    });
   }, []);
+
+  // --- Dynamic Log Polling ---
+  useEffect(() => {
+    const pollLogs = async () => {
+      try {
+        const response = await fetch(WEBHOOKS.LOG_READER);
+        if (response.ok) {
+          const data = await response.json();
+          if (data && data.message) {
+            const status = data.status || 'INFO';
+            addLog(status as LogEntry['status'], data.message);
+          }
+        }
+      } catch (error) {
+        // Silent catch for CORS or network issues during polling
+        console.error('Log polling error:', error);
+      }
+    };
+
+    const interval = setInterval(pollLogs, 4000);
+    return () => clearInterval(interval);
+  }, [addLog]);
 
   useEffect(() => {
     if (consoleEndRef.current) {
       consoleEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [logs]);
-
-  // --- Lector de Logs Real desde n8n ---
-  useEffect(() => {
-    const fetchRemoteLogs = async () => {
-      try {
-        const response = await fetch(WEBHOOKS.LOG_READER);
-        if (response.ok) {
-          const data = await response.json();
-          // Si n8n devuelve un array de strings o de objetos
-          if (Array.isArray(data) && data.length > 0) {
-            const newLogs = data.map((msg: any, index: number) => ({
-              id: `remote-${Date.now()}-${index}`,
-              time: new Date().toLocaleTimeString('en-US', { hour12: false }),
-              status: 'INFO' as const,
-              message: typeof msg === 'string' ? msg : JSON.stringify(msg)
-            }));
-            // Actualizamos los logs sin borrar los anteriores, limitando a los últimos 50
-            setLogs(prev => [...prev, ...newLogs].slice(-50));
-          }
-        }
-      } catch (error) {
-        console.error("Error consultando log-reader:", error);
-      }
-    };
-
-    // Consultar cada 4 segundos
-    const interval = setInterval(fetchRemoteLogs, 4000);
-    return () => clearInterval(interval);
-  }, []);
 
   // --- Landing Builder State ---
   const [lbScript, setLbScript] = useState('');
@@ -332,39 +328,41 @@ export default function App() {
     return () => clearInterval(interval);
   }, [lbIsGenerating, lbStartTime]);
 
-const handleLbGenerate = async () => {
-  if (!lbScript.trim()) return;
-  
-  setLbIsGenerating(true);
-  setLbHtml(null);
-  setLbProgress(0);
-  setLbPhase(1);
-  setLbStartTime(Date.now());
-  addLog('START', 'Iniciando orquestación en n8n...'); // Mensaje personalizado
+  // --- Cold Lead Engine State ---
+  const [clCsv, setClCsv] = useState('');
+  const [clIsProcessing, setClIsProcessing] = useState(false);
+  const [clLeads, setClLeads] = useState<any[]>([]);
+  const [clProgress, setClProgress] = useState(0);
+  const [clPhase, setClPhase] = useState(0);
+  const [clStats, setClStats] = useState({ total: 0, sectors: 0, enriched: 0 });
 
-    // Simulation of progress
-    const stages = [
-      { phase: 1, progress: 15, delay: 1000, msg: 'Interpreting script structure...' },
-      { phase: 2, progress: 30, delay: 3000, msg: 'Analyzing visual patterns...' },
-      { phase: 3, progress: 50, delay: 6000, msg: 'Planning strategic layout...' },
-      { phase: 4, progress: 70, delay: 10000, msg: 'Designing UI components...' },
-      { phase: 5, progress: 85, delay: 15000, msg: 'Assembling final structure...' },
-    ];
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result as string;
+      setClCsv(text);
+      addLog('INFO', `File "${file.name}" loaded successfully.`);
+    };
+    reader.readAsText(file);
+  };
 
-    stages.forEach(s => {
-      setTimeout(() => {
-        if (lbIsGenerating) {
-          setLbPhase(s.phase);
-          setLbProgress(s.progress);
-          addLog('INFO', s.msg);
-        }
-      }, s.delay);
-    });
+  const handleLbGenerate = async () => {
+    if (!lbScript.trim()) return;
+    
+    setLbIsGenerating(true);
+    setLbHtml(null);
+    setLbProgress(0);
+    setLbPhase(1);
+    setLbStartTime(Date.now());
+    addLog('START', 'Initializing Landing Builder pipeline...');
 
     try {
       const payload: any = {
+        prompt: lbScript, // n8n orchestrator usually expects 'prompt'
         script_text: lbScript,
-        raw_script: lbScript,
         mode: lbMode,
         template_id: lbTemplateId,
         project_type: lbProjectType,
@@ -419,14 +417,14 @@ const handleLbGenerate = async () => {
         payload.image_urls = validImages;
       }
 
-      const response = await fetch(WEBHOOKS.LB_ORCHESTRATOR, {
+      const response = await fetch(WEBHOOKS.ORCHESTRATOR, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
 
       const data = await response.json();
-      if (data.success && (data.html || data.html_code)) {
+      if (data.success || data.html || data.html_code) {
         setLbHtml(data.html || data.html_code);
         setLbProgress(100);
         setLbPhase(6);
@@ -441,14 +439,6 @@ const handleLbGenerate = async () => {
     }
   };
 
-  // --- Cold Lead Engine State ---
-  const [clCsv, setClCsv] = useState('');
-  const [clIsProcessing, setClIsProcessing] = useState(false);
-  const [clLeads, setClLeads] = useState<any[]>([]);
-  const [clProgress, setClProgress] = useState(0);
-  const [clPhase, setClPhase] = useState(0);
-  const [clStats, setClStats] = useState({ total: 0, sectors: 0, enriched: 0 });
-
   const handleClProcess = async () => {
     if (!clCsv.trim()) return;
 
@@ -459,56 +449,36 @@ const handleLbGenerate = async () => {
     addLog('START', 'Launching Cold Lead Engine...');
 
     try {
-      // Phase 1: Classify
+      // Phase 1: Strategy & Processing via n8n
       setClPhase(1);
-      setClProgress(10);
-      addLog('INFO', 'Classifying leads from CSV...');
-      const classRes = await fetch(WEBHOOKS.CL_CLASSIFIER, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ csv_text: clCsv })
-      });
-      const classData = await classRes.json();
-      if (!classData.success) throw new Error('Classification failed');
+      setClProgress(20);
+      addLog('INFO', 'Sending data to Strategy Engine...');
       
-      const leads = classData.classified_leads;
-      const sectors = classData.sectors_found || [];
-      setClStats(prev => ({ ...prev, total: leads.length, sectors: sectors.length }));
-      addLog('SUCCESS', `Classified ${leads.length} leads across ${sectors.length} sectors.`);
-
-      // Phase 2: Strategy
-      setClPhase(2);
-      setClProgress(30);
-      addLog('INFO', 'Generating sector-specific strategies...');
-      const strategies: any = {};
-      for (const sector of sectors) {
-        const stratRes = await fetch(WEBHOOKS.CL_STRATEGY, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sector, company_name: 'HSK' })
-        });
-        const stratData = await stratRes.json();
-        if (stratData.success) strategies[sector] = stratData.strategy;
-      }
-      addLog('SUCCESS', 'Strategies generated for all sectors.');
-
-      // Phase 3: Enrich
-      setClPhase(3);
-      setClProgress(60);
-      addLog('INFO', 'Enriching leads with personalized messaging...');
-      const enrichRes = await fetch(WEBHOOKS.CL_ENRICHER, {
+      const response = await fetch(WEBHOOKS.CL_STRATEGY, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ leads, strategies, company_name: 'HSK' })
+        body: JSON.stringify({ 
+          csv_text: clCsv,
+          company_name: 'HSK'
+        })
       });
-      const enrichData = await enrichRes.json();
-      if (!enrichData.success) throw new Error('Enrichment failed');
 
-      setClLeads(enrichData.enriched_leads);
-      setClStats(prev => ({ ...prev, enriched: enrichData.enriched_leads.length }));
-      setClProgress(100);
-      setClPhase(4);
-      addLog('SUCCESS', 'Lead enrichment complete.');
+      const data = await response.json();
+      
+      if (data.success || data.leads || data.enriched_leads) {
+        const leads = data.enriched_leads || data.leads || [];
+        setClLeads(leads);
+        setClStats({
+          total: leads.length,
+          sectors: data.sectors_found?.length || 0,
+          enriched: leads.length
+        });
+        setClProgress(100);
+        setClPhase(4);
+        addLog('SUCCESS', `Processed ${leads.length} leads successfully.`);
+      } else {
+        throw new Error(data.error || 'Processing failed');
+      }
     } catch (error: any) {
       addLog('ERROR', `Engine error: ${error.message}`);
     } finally {
@@ -1040,7 +1010,17 @@ const handleLbGenerate = async () => {
                   <SectionHeader label="Lead Source" icon={Database} />
                   
                   <div className="mb-6">
-                    <div className="border-2 border-dashed border-white/5 rounded-2xl p-8 flex flex-col items-center justify-center text-center hover:border-brand-purple/30 hover:bg-brand-purple/5 transition-all cursor-pointer group">
+                    <div 
+                      onClick={() => fileInputRef.current?.click()}
+                      className="border-2 border-dashed border-white/5 rounded-2xl p-8 flex flex-col items-center justify-center text-center hover:border-brand-purple/30 hover:bg-brand-purple/5 transition-all cursor-pointer group"
+                    >
+                      <input 
+                        type="file" 
+                        ref={fileInputRef}
+                        onChange={handleFileUpload}
+                        accept=".csv"
+                        className="hidden" 
+                      />
                       <div className="w-12 h-12 bg-zinc-900 rounded-xl flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
                         <Upload className="text-zinc-500 group-hover:text-brand-purple" size={24} />
                       </div>
