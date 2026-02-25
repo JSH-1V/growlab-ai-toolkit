@@ -209,30 +209,31 @@ export default function App() {
   useEffect(() => {
     const pollLogs = async () => {
       try {
+        // Intentamos GET primero, si falla con 400, n8n probablemente espera POST
         const response = await fetch(WEBHOOKS.LOG_READER, {
-          method: 'GET'
-          // Eliminamos Content-Type para GET ya que no enviamos cuerpo
+          method: 'GET',
+          cache: 'no-store'
         });
         
         if (response.ok) {
           const text = await response.text();
-          if (!text) return;
+          if (!text || text.trim() === "") return;
           
-          const data = JSON.parse(text);
-          const logItems = Array.isArray(data) ? data : [data];
-          
-          logItems.forEach(item => {
-            if (item && item.message) {
-              const status = item.status || 'INFO';
-              addLog(status as LogEntry['status'], item.message);
-            }
-          });
-        } else {
-          // Si el servidor responde con error, lo registramos una vez para diagnóstico
-          console.warn(`Log reader returned status ${response.status}`);
+          try {
+            const data = JSON.parse(text);
+            const logItems = Array.isArray(data) ? data : [data];
+            
+            logItems.forEach(item => {
+              if (item && item.message) {
+                const status = item.status || 'INFO';
+                addLog(status as LogEntry['status'], item.message);
+              }
+            });
+          } catch (e) {
+            console.error("Error parseando logs:", text);
+          }
         }
       } catch (error) {
-        // Error de red o CORS
         console.error('Log polling network error:', error);
       }
     };
@@ -439,17 +440,17 @@ export default function App() {
         body: JSON.stringify(payload)
       });
 
+      const responseText = await response.text();
+
       if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Server error (${response.status}): ${errorText || response.statusText}`);
+        throw new Error(`Server error (${response.status}): ${responseText || response.statusText}`);
       }
 
-      const text = await response.text();
-      if (!text) {
+      if (!responseText || responseText.trim() === "") {
         throw new Error('Server returned an empty response');
       }
 
-      const data = JSON.parse(text);
+      const data = JSON.parse(responseText);
       if (data.success || data.html || data.html_code) {
         setLbHtml(data.html || data.html_code);
         setLbProgress(100);
@@ -490,17 +491,17 @@ export default function App() {
         })
       });
 
+      const responseText = await response.text();
+
       if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Server error (${response.status}): ${errorText || response.statusText}`);
+        throw new Error(`Server error (${response.status}): ${responseText || response.statusText}`);
       }
 
-      const text = await response.text();
-      if (!text) {
+      if (!responseText || responseText.trim() === "") {
         throw new Error('Server returned an empty response');
       }
 
-      const data = JSON.parse(text);
+      const data = JSON.parse(responseText);
       
       if (data.success || data.leads || data.enriched_leads) {
         const leads = data.enriched_leads || data.leads || [];
