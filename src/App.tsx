@@ -210,16 +210,15 @@ export default function App() {
     const pollLogs = async () => {
       try {
         const response = await fetch(WEBHOOKS.LOG_READER, {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json'
-          }
+          method: 'GET'
+          // Eliminamos Content-Type para GET ya que no enviamos cuerpo
         });
         
         if (response.ok) {
-          const data = await response.json();
+          const text = await response.text();
+          if (!text) return;
           
-          // Handle both single object and array of logs
+          const data = JSON.parse(text);
           const logItems = Array.isArray(data) ? data : [data];
           
           logItems.forEach(item => {
@@ -228,10 +227,13 @@ export default function App() {
               addLog(status as LogEntry['status'], item.message);
             }
           });
+        } else {
+          // Si el servidor responde con error, lo registramos una vez para diagnóstico
+          console.warn(`Log reader returned status ${response.status}`);
         }
       } catch (error) {
-        // Silent catch for CORS or network issues during polling
-        console.error('Log polling error:', error);
+        // Error de red o CORS
+        console.error('Log polling network error:', error);
       }
     };
 
@@ -437,7 +439,17 @@ export default function App() {
         body: JSON.stringify(payload)
       });
 
-      const data = await response.json();
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Server error (${response.status}): ${errorText || response.statusText}`);
+      }
+
+      const text = await response.text();
+      if (!text) {
+        throw new Error('Server returned an empty response');
+      }
+
+      const data = JSON.parse(text);
       if (data.success || data.html || data.html_code) {
         setLbHtml(data.html || data.html_code);
         setLbProgress(100);
@@ -478,7 +490,17 @@ export default function App() {
         })
       });
 
-      const data = await response.json();
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Server error (${response.status}): ${errorText || response.statusText}`);
+      }
+
+      const text = await response.text();
+      if (!text) {
+        throw new Error('Server returned an empty response');
+      }
+
+      const data = JSON.parse(text);
       
       if (data.success || data.leads || data.enriched_leads) {
         const leads = data.enriched_leads || data.leads || [];
