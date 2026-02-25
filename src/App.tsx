@@ -209,13 +209,25 @@ export default function App() {
   useEffect(() => {
     const pollLogs = async () => {
       try {
-        const response = await fetch(WEBHOOKS.LOG_READER);
+        const response = await fetch(WEBHOOKS.LOG_READER, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
+        
         if (response.ok) {
           const data = await response.json();
-          if (data && data.message) {
-            const status = data.status || 'INFO';
-            addLog(status as LogEntry['status'], data.message);
-          }
+          
+          // Handle both single object and array of logs
+          const logItems = Array.isArray(data) ? data : [data];
+          
+          logItems.forEach(item => {
+            if (item && item.message) {
+              const status = item.status || 'INFO';
+              addLog(status as LogEntry['status'], item.message);
+            }
+          });
         }
       } catch (error) {
         // Silent catch for CORS or network issues during polling
@@ -330,6 +342,8 @@ export default function App() {
 
   // --- Cold Lead Engine State ---
   const [clCsv, setClCsv] = useState('');
+  const [clCompanyName, setClCompanyName] = useState('HSK');
+  const [clSenderName, setClSenderName] = useState('Alex');
   const [clIsProcessing, setClIsProcessing] = useState(false);
   const [clLeads, setClLeads] = useState<any[]>([]);
   const [clProgress, setClProgress] = useState(0);
@@ -458,8 +472,9 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          csv_text: clCsv,
-          company_name: 'HSK'
+          data: clCsv,
+          company_name: clCompanyName,
+          sender_name: clSenderName
         })
       });
 
@@ -1045,8 +1060,8 @@ export default function App() {
                   />
 
                   <SectionHeader label="Engine Config" icon={Zap} />
-                  <InputField label="Company Name" placeholder="e.g. HSK" />
-                  <InputField label="Sender Name" placeholder="e.g. Alex" />
+                  <InputField label="Company Name" placeholder="e.g. HSK" value={clCompanyName} onChange={setClCompanyName} />
+                  <InputField label="Sender Name" placeholder="e.g. Alex" value={clSenderName} onChange={setClSenderName} />
 
                   <div className="mt-8">
                     <button
